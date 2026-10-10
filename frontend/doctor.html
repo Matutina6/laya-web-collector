@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>医生采集台 · Laya</title>
+  <link rel="stylesheet" href="/assets/styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><div class="brand-mark">D</div><div>医生采集台</div></div>
+    <div class="top-actions">
+      <span class="pill" id="encounter-pill">加载中…</span>
+      <span class="pill" id="current-user">—</span>
+      <a class="btn small ghost" href="/patient" target="_blank">打开患者页</a>
+      <a class="btn small ghost" href="/">返回首页</a>
+    </div>
+  </header>
+
+  <main class="page">
+    <section class="card doctor-summary">
+      <div>
+        <div class="tiny muted">当前主诉</div>
+        <div id="chief-complaint" class="chief-value">胸痛</div>
+      </div>
+      <div class="chips">
+        <span class="pill">目标事实优先</span>
+        <span class="pill">AI 候选需校验</span>
+        <span class="pill warn">裁定标签不在医生页展示</span>
+      </div>
+    </section>
+
+    <section class="workspace">
+      <aside class="card side-card">
+        <div class="section-title"><h3>待采集事实</h3><span class="tiny muted" id="fact-count">–</span></div>
+        <div class="fact-list" id="fact-list"><div class="empty">加载中…</div></div>
+      </aside>
+
+      <section class="card chat-card">
+        <div class="section-title">
+          <h2>问诊对话</h2>
+          <span class="tiny muted" id="turn-count"></span>
+        </div>
+        <div class="chat-log" id="chat-log"><div class="empty">选择左侧一个事实开始采集。</div></div>
+
+        <div id="attempt-panel" class="hidden">
+          <div class="current-question" id="current-question"></div>
+          <div class="composer">
+            <div id="question-editor"></div>
+            <div class="composer-row">
+              <div class="muted tiny" id="channel-hint"></div>
+              <button class="btn primary" id="send-question-btn">发送问题给患者</button>
+            </div>
+            <div class="divider"></div>
+            <label class="label" for="answer-text">患者回答（医生代录或等待患者页同步）</label>
+            <textarea id="answer-text" rows="3" placeholder="例如：像石头压着一样，已经持续十几分钟了"></textarea>
+            <div class="composer-row">
+              <span class="muted tiny">回答写入后立即返回；事实抽取在后台异步完成。</span>
+              <button class="btn primary" id="submit-answer-btn">提交回答并抽取</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <aside class="card ledger-card">
+        <div class="section-title"><h3>事实账本</h3><span class="tiny muted">candidate / validator / state</span></div>
+        <div id="ledger"><div class="empty">尚未开始当前 attempt。</div></div>
+      </aside>
+    </section>
+  </main>
+
+  <script src="/assets/app.js" defer></script>
+  <script src="/assets/page-doctor.js" defer></script>
+</body>
+</html>

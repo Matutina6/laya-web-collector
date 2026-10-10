@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Laya 临床事实采集台</title>
+  <link rel="stylesheet" href="/assets/styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><div class="brand-mark">L</div><div>Laya 临床事实采集台</div></div>
+    <div class="top-actions">
+      <span class="pill" id="health-pill">检查服务中…</span>
+      <span class="pill" id="current-user">—</span>
+    </div>
+  </header>
+  <main class="page">
+    <section class="hero">
+      <div class="hero-card">
+        <div class="pill ok">real-pilot · event-sourced</div>
+        <h1>让真实问诊自然发生，<br />让训练字段自动留下痕迹。</h1>
+        <p>
+          患者只看到对话；医生看到目标事实、当前问题和事实账本；
+          LLM 只负责提出结构化候选，不直接决定临床真值。每次事实尝试都会冻结
+          attempt 前的可见状态、channel、question 和后续独立裁定结果。
+        </p>
+        <div class="hero-actions">
+          <a class="btn primary" href="/doctor">进入医生采集页</a>
+          <a class="btn" href="/patient">进入患者对话页</a>
+          <a class="btn ghost" href="/adjudicator">进入裁定队列</a>
+        </div>
+      </div>
+      <div class="card hero-card">
+        <div class="section-title"><h3>当前采集概况</h3><span class="tiny muted" id="stats-time"></span></div>
+        <div class="stats-grid">
+          <div class="stat"><b id="stat-cases">–</b><span>病例</span></div>
+          <div class="stat"><b id="stat-encounters">–</b><span>问诊会话</span></div>
+          <div class="stat"><b id="stat-attempts">–</b><span>事实尝试</span></div>
+          <div class="stat"><b id="stat-pending">–</b><span>待裁定</span></div>
+        </div>
+        <div class="divider"></div>
+        <button class="btn primary" id="export-btn">生成训练导出</button>
+        <p class="tiny muted mt-10">导出会生成 route_samples_v2.jsonl、success_*.jsonl 和 manifest。</p>
+      </div>
+    </section>
+
+    <section class="card hero-card">
+      <div class="section-title"><h2>界面使用顺序</h2></div>
+      <div class="stats-grid">
+        <div class="stat"><b>1</b><span>医生选择目标事实，系统随机分配 channel</span></div>
+        <div class="stat"><b>2</b><span>医生确认或编辑问题，患者自然回答</span></div>
+        <div class="stat"><b>3</b><span>LLM 异步抽取候选，validator 校验后进入事实账本</span></div>
+        <div class="stat"><b>4</b><span>独立裁定者标记 acquired / recorded / usable / actionable</span></div>
+      </div>
+    </section>
+  </main>
+  <script src="/assets/app.js" defer></script>
+  <script src="/assets/page-index.js" defer></script>
+</body>
+</html>

@@ -1,0 +1,1 @@
+-- Single source of truth for the Postgres schema: supabase/migrations/ (20260930120000_pilot_schema.sql, 20260930120100_app_users.sql, 20260930120200_security.sql).
