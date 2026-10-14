@@ -273,6 +273,30 @@ class LLMCall(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
 
 
+class GameScoreEvent(Base):
+    """Durable, per-answer scoring for local synthetic role-play games."""
+
+    __tablename__ = "game_score_events"
+
+    score_id: Mapped[str] = mapped_column(String(64), primary_key=True, default=new_id)
+    encounter_id: Mapped[str] = mapped_column(ForeignKey("encounters.encounter_id"), nullable=False, index=True)
+    attempt_id: Mapped[str] = mapped_column(ForeignKey("fact_attempts.attempt_id"), nullable=False)
+    answer_turn_id: Mapped[str] = mapped_column(ForeignKey("turn_events.turn_id"), nullable=False, unique=True)
+    status: Mapped[str] = mapped_column(String(24), nullable=False, default="queued")
+    matched_fact_ids_json: Mapped[list] = mapped_column(JSONType, nullable=False, default=list)
+    llm_call_id: Mapped[str | None] = mapped_column(ForeignKey("llm_calls.call_id"))
+    note_text: Mapped[str | None] = mapped_column(Text)
+    note_llm_call_id: Mapped[str | None] = mapped_column(ForeignKey("llm_calls.call_id"))
+    note_status: Mapped[str] = mapped_column(String(24), nullable=False, default="queued")
+    note_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    note_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    error: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
 class FactAssertionCandidate(Base):
     __tablename__ = "fact_assertion_candidates"
 

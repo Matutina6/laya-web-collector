@@ -39,6 +39,7 @@ from .models import (
     FactAttempt,
     FactCurrentState,
     FactStateEvent,
+    GameScoreEvent,
     LLMCall,
     PatientActor,
     PatientQuestionLink,
@@ -55,6 +56,12 @@ from .models import (
 CHANNELS = ("Structured", "LLM", "Human")
 STATE_STATUSES = {"unknown", "asked_no_answer", "ambiguous", "obtained", "denied", "conflicting", "not_applicable"}
 VALID_INTERACTION_MODES = {"async", "sync", "semi_async_human"}
+
+
+def _is_roleplay_attempt(db: Session, attempt: FactAttempt) -> bool:
+    encounter = db.get(Encounter, attempt.encounter_id)
+    case = db.get(Case, encounter.case_id) if encounter else None
+    return bool(case and case.source_type == "synthetic" and (case.template_id or "").startswith("roleplay:"))
 
 
 def default_interaction_mode(channel: str) -> str:
@@ -381,7 +388,16 @@ def start_attempt(db: Session, encounter_id: str, payload: Mapping[str, Any]) ->
     )
     db.add(snapshot)
     db.flush()
-    interaction_mode = str(payload.get("interaction_mode") or default_interaction_mode(executed))
+    case = _get_or_404(db, Case, "case_id", encounter.case_id)
+    game_human_mode = (
+        case.source_type == "synthetic"
+        and (case.template_id or "").startswith("roleplay:")
+        and executed == "Human"
+    )
+    interaction_mode = str(
+        payload.get("interaction_mode")
+        or ("semi_async_human" if game_human_mode else default_interaction_mode(executed))
+    )
     if interaction_mode not in VALID_INTERACTION_MODES:
         raise ValueError(f"invalid interaction_mode: {interaction_mode}")
     # Allocation concealment evidence: the target must have been declared
@@ -783,9 +799,11 @@ def enqueue_extract_job(
     """Queue answer extraction durably (W6/B7).
 
     ``idempotency_key`` makes repeated answers/retries collapse onto one job.
-    Human-channel attempts use ``record_human_candidate`` and are not queued.
+    Regular Human-channel attempts use ``record_human_candidate``. Local
+    role-play questions keep the Human-authored question but still queue LLM
+    extraction so their answers enter the normal candidate and review flow.
     """
-    if attempt.executed_channel == "Human" or attempt.status.startswith("failed_"):
+    if (attempt.executed_channel == "Human" and not _is_roleplay_attempt(db, attempt)) or attempt.status.startswith("failed_"):
         return None
     key = f"extract:{attempt.attempt_id}:{answer_turn_id}"
     existing = db.scalar(select(QuestionJob).where(QuestionJob.idempotency_key == key))
@@ -817,7 +835,7 @@ def process_question_job(db: Session, job_id: str) -> QuestionJob:
     try:
         attempt = _get_or_404(db, FactAttempt, "attempt_id", job.attempt_id)
         if job.job_type == "extract_answer":
-            if attempt.executed_channel == "Human" or attempt.status.startswith("failed_"):
+            if (attempt.executed_channel == "Human" and not _is_roleplay_attempt(db, attempt)) or attempt.status.startswith("failed_"):
                 job.status = "succeeded"
                 job.error = "skipped: attempt does not need LLM extraction"
             else:
@@ -1037,7 +1055,9 @@ def create_patient_session_link(
     ttl_minutes: int | None = None,
     actor_id: str | None = None,
 ) -> tuple[PatientQuestionLink, str]:
-    _get_or_404(db, Encounter, "encounter_id", encounter_id)
+    encounter = _get_or_404(db, Encounter, "encounter_id", encounter_id)
+    case = _get_or_404(db, Case, "case_id", encounter.case_id)
+    is_roleplay = case.source_type == "synthetic" and (case.template_id or "").startswith("roleplay:")
     token = secrets.token_urlsafe(32)
     link = PatientQuestionLink(
         token_hash=sha256_text(token),
@@ -1045,6 +1065,7 @@ def create_patient_session_link(
         attempt_id=None,
         question_event_id=None,
         expires_at=utcnow() + timedelta(minutes=ttl_minutes or settings.patient_link_ttl_minutes),
+        max_uses=200_000 if is_roleplay else 100,
     )
     db.add(link)
     audit(
@@ -1133,6 +1154,7 @@ def patient_session_view(db: Session, token: str) -> dict[str, Any]:
         .order_by(QuestionEvent.queued_at.asc(), QuestionEvent.created_at.asc())
     ).all()
     result = []
+    history = []
     changed = False
     for question in questions:
         if _is_expired(question.expires_at):
@@ -1154,12 +1176,32 @@ def patient_session_view(db: Session, token: str) -> dict[str, Any]:
                 "expires_at": question.expires_at,
             }
         )
+    answered_questions = db.scalars(
+        select(QuestionEvent)
+        .join(FactAttempt, FactAttempt.attempt_id == QuestionEvent.attempt_id)
+        .where(
+            FactAttempt.encounter_id == encounter.encounter_id,
+            QuestionEvent.status == "answered",
+            *(
+                [QuestionEvent.question_event_id == link.question_event_id]
+                if link.question_event_id
+                else []
+            ),
+        )
+        .order_by(QuestionEvent.created_at.asc())
+    ).all()
+    for answered_question in answered_questions:
+        answered_attempt = db.get(FactAttempt, answered_question.attempt_id)
+        answer_turn = db.get(TurnEvent, answered_attempt.end_turn_id) if answered_attempt.end_turn_id else None
+        if answer_turn is not None:
+            history.append({"question_text": answered_question.question_text, "answer_text": answer_turn.raw_text})
     db.commit()
     return {
         "encounter_id": encounter.encounter_id,
         "chief_complaint": _chief_complaint_for_case(db, encounter.case_id),
         "expires_at": link.expires_at,
         "questions": result,
+        "history": history,
     }
 
 
@@ -1278,7 +1320,8 @@ def submit_answer(db: Session, attempt_id: str, payload: Mapping[str, Any]) -> T
             actor_id=payload.get("actor_id"),
         )
     else:
-        attempt.status = "answered" if attempt.executed_channel == "Human" else "extracting"
+        game_attempt = _is_roleplay_attempt(db, attempt)
+        attempt.status = "answered" if attempt.executed_channel == "Human" and not game_attempt else "extracting"
         db.add(attempt)
         db.commit()
         # W6.1: extraction is a durable queued job, not a fire-and-forget
@@ -1289,6 +1332,15 @@ def submit_answer(db: Session, attempt_id: str, payload: Mapping[str, Any]) -> T
             answer_turn_id=turn.turn_id,
             question_event_id=question.question_event_id if question is not None else None,
         )
+        if game_attempt and db.scalar(
+            select(GameScoreEvent).where(GameScoreEvent.answer_turn_id == turn.turn_id)
+        ) is None:
+            db.add(GameScoreEvent(
+                encounter_id=attempt.encounter_id,
+                attempt_id=attempt.attempt_id,
+                answer_turn_id=turn.turn_id,
+                status="queued",
+            ))
         db.commit()
     db.refresh(turn)
     return turn

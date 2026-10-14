@@ -13,7 +13,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 from urllib.parse import urlsplit
 
-from sqlalchemy import create_engine, event, text
+from sqlalchemy import create_engine, event, inspect, text
 from sqlalchemy.orm import Session, sessionmaker
 
 from .config import settings
@@ -74,6 +74,21 @@ def init_db() -> None:
     """
     if settings.db_auto_create:
         Base.metadata.create_all(engine)
+        if engine.dialect.name == "sqlite":
+            # create_all does not add columns to an existing local game table.
+            # Keep previously collected synthetic sessions usable after updates.
+            columns = {column["name"] for column in inspect(engine).get_columns("game_score_events")}
+            additions = {
+                "note_text": "TEXT",
+                "note_llm_call_id": "TEXT",
+                "note_status": "VARCHAR(24) NOT NULL DEFAULT 'queued'",
+                "note_attempts": "INTEGER NOT NULL DEFAULT 0",
+                "note_started_at": "DATETIME",
+            }
+            with engine.begin() as connection:
+                for name, definition in additions.items():
+                    if name not in columns:
+                        connection.exec_driver_sql(f"ALTER TABLE game_score_events ADD COLUMN {name} {definition}")
 
 
 def current_schema() -> str | None:

@@ -32,7 +32,7 @@ from .models import (
     SplitManifest,
     TrainingExport,
 )
-from .services import canonical_json, sha256_text
+from .services import canonical_json
 from .storage import get_storage
 
 
@@ -76,7 +76,7 @@ def _write_jsonl(path: Path, rows: list[Mapping[str, Any]]) -> str:
     path.parent.mkdir(parents=True, exist_ok=True)
     content = "".join(json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n" for row in rows)
     path.write_text(content, encoding="utf-8")
-    return hashlib.sha256(content.encode("utf-8")).hexdigest()
+    return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 def _final_consensus(db: Session, attempt_id: str) -> AdjudicationConsensus | None:
@@ -534,7 +534,7 @@ def export_training(db: Session, payload: Mapping[str, Any]) -> TrainingExport:
         json.dumps(split_manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
-    file_hashes["split_manifest.json"] = sha256_text(split_manifest_path.read_text(encoding="utf-8"))
+    file_hashes["split_manifest.json"] = hashlib.sha256(split_manifest_path.read_bytes()).hexdigest()
     file_hashes["encounter_outcomes.jsonl"] = _write_jsonl(
         export_dir / "encounter_outcomes.jsonl", encounter_rows
     )
@@ -543,7 +543,7 @@ def export_training(db: Session, payload: Mapping[str, Any]) -> TrainingExport:
         json.dumps(inter_rater_metrics, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
-    file_hashes["inter_rater_metrics.json"] = sha256_text(metrics_path.read_text(encoding="utf-8"))
+    file_hashes["inter_rater_metrics.json"] = hashlib.sha256(metrics_path.read_bytes()).hexdigest()
 
     manifest = {
         "export_version": "real-pilot-export-v2",
@@ -592,7 +592,7 @@ def export_training(db: Session, payload: Mapping[str, Any]) -> TrainingExport:
             for name, digest in sorted(
                 {
                     **file_hashes,
-                    "manifest.json": sha256_text(manifest_path.read_text(encoding="utf-8")),
+                    "manifest.json": hashlib.sha256(manifest_path.read_bytes()).hexdigest(),
                 }.items()
             )
         ),

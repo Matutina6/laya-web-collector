@@ -10,7 +10,7 @@ docs/ARCHITECTURE_AND_TRAINING_DESIGN.md
 
 ```text
 患者页：只看到主诉、医生问题和对话，不看到 target fact / channel / AI 候选
-医生页：选择目标事实、确认问题、录入回答、查看事实账本
+医生演练页：自由提问、查看对话与当前得分；常规采集页仍保留事实账本
 裁定页：独立标记 acquired / recorded / usable / actionable
 后端：FastAPI + PostgreSQL/SQLite，LLM 只产生 candidate
 导出：route_samples_v2.jsonl + success_*.jsonl + split_manifest + manifest/checksum
@@ -57,6 +57,74 @@ multi-head export:
 
 ## 1. 本地运行
 
+### 问诊演练入口
+
+启动后打开 `http://127.0.0.1:8080/`，可以选择：
+
+- **医生 + 真人患者**：创建虚构病例，复制医生页的患者邀请链接给另一位玩家；医生可直接自由提问。
+- **医生 + AI 患者**：医生自由提问后，模型按虚拟病历卡回答；模型暂时不可用时使用该卡的固定回答。
+- **患者**：随机领取一张仅在患者页面展示的虚拟病历卡，复制医生邀请链接给另一位玩家，按卡片设定回答。
+- **患者 + AI 医生**：领取虚拟病历卡后，AI 医生仅根据主诉和已发生的问答逐轮提问；患者每次回答后自动进入下一题。此模式需要配置 `LLM_API_KEY`。
+
+演练复用原有的 `case → encounter → attempt → question → answer → adjudication → export`
+记录流程。医生无需选择目标事实；后台自动为每轮问题归类，患者回答仍进入原有抽取和裁定队列。
+另外，后台 LLM 按虚拟病历卡判定本轮回答透露了哪些新信息，每项首次命中加 10 分，重复信息不加分。
+医生演练页显示累计分数、对话，以及每轮根据已发生问答自动整理的病历；病历整理完成后才进行本轮计分。AI 评分只是游戏反馈，不能代替独立临床裁定；未配置 API 密钥时问答照常保存，但不自动整理病历或加分。
+当前提供三个合成胸痛病例；每场会话独立保存。研究人员仍可在裁定页完成独立裁定，
+再按原有导出规则生成训练数据。演练入口只在本地 `APP_ENV=development` 且
+`AUTH_MODE=disabled` 时开放，不用于真实患者数据。
+
+两位玩家在同一台电脑上可直接用两个浏览器窗口。跨设备使用时，先让服务器监听局域网地址，
+再让双方通过电脑的局域网 IP 打开页面；邀请链接会使用当前访问地址。仅在可信局域网使用本地无登录模式。
+
+```powershell
+.\.venv\Scripts\python.exe -m uvicorn backend.app:app --host 0.0.0.0 --port 8080
+```
+
+Windows / PowerShell（Python 3.12，与 Dockerfile 一致）：
+
+```powershell
+# 先进入包含 backend/ 和 requirements.txt 的项目根目录
+py -3.12 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+.\.venv\Scripts\python.exe -m uvicorn backend.app:app --host 127.0.0.1 --port 8080 --reload
+```
+
+首次体验不需要创建 `.env`、配置 LLM 密钥或安装 PostgreSQL / Node.js。
+程序默认关闭登录验证、在项目目录创建 SQLite 数据库，并初始化演示病例。
+直接调用虚拟环境中的 Python，无需执行 `Activate.ps1`。
+
+如需自定义配置，在项目根目录创建 UTF-8 编码的 `.env`，例如：
+
+```dotenv
+APP_ENV=development
+DATABASE_URL=sqlite:///./local_pilot.sqlite3
+EXPORT_DIR=./exports
+AUTH_MODE=disabled
+STORAGE_BACKEND=local
+DB_AUTO_CREATE=1
+AUTO_SEED_DEMO=1
+LLM_API_KEY=
+```
+
+现有 `env.example` 中的数据库和导出目录是原开发环境的 Linux 绝对路径，
+在 Windows 上使用前需替换。未使用真实 LLM 时，应让 `LLM_API_KEY` 留空，
+不要保留模板中的 `replace_with_your_bailian_api_key` 占位值。
+
+持续处理异步问题、回答抽取和过期任务时，可在第二个 PowerShell 窗口的项目根目录运行：
+
+```powershell
+.\.venv\Scripts\python.exe -m scripts.process_question_jobs
+```
+
+本地端到端检查（使用临时 SQLite 数据库；请不要预设 `DATABASE_URL` / `EXPORT_DIR` 环境变量）：
+
+```powershell
+.\.venv\Scripts\python.exe -m scripts.smoke_api
+```
+
+Linux / macOS：
+
 ```bash
 cd /home/matut/Projects/laya/research/clinical_router/real_pilot/web_collector
 python3 -m venv /tmp/laya-web-venv
@@ -75,6 +143,9 @@ http://127.0.0.1:8080/doctor    医生采集页
 http://127.0.0.1:8080/patient   患者对话页
 http://127.0.0.1:8080/adjudicator 独立裁定页
 ```
+
+患者页必须使用医生页生成的 `/patient?token=...` 链接；直接打开 `/patient`
+会显示“链接无效或已过期”。开发环境的接口文档在 `http://127.0.0.1:8080/docs`。
 
 默认使用 `local_pilot.sqlite3` 和自动 seed demo encounter，适合本地验收 UI。生产环境应关闭：
 
