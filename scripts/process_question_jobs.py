@@ -16,6 +16,7 @@ import time
 
 from backend.config import settings, validate_production_settings
 from backend.db import SessionLocal, check_database_schema, init_db
+from backend.game import process_pending_game_scores
 from backend.log_redaction import install_log_redaction
 from backend.services import expire_due_questions, process_pending_question_jobs
 
@@ -44,6 +45,7 @@ def main() -> None:
     while True:
         now = time.monotonic()
         with SessionLocal() as db:
+            process_pending_game_scores(db, limit=args.limit)
             jobs = process_pending_question_jobs(db, limit=args.limit)
             for job in jobs:
                 print(job.job_id, job.status, job.error or "", flush=True)

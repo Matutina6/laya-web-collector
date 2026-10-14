@@ -21,6 +21,19 @@ class LoginRequest(BaseModel):
     password: str = Field(min_length=1, max_length=256)
 
 
+class GameSessionCreate(BaseModel):
+    patient_mode: Literal["human", "ai"]
+    doctor_mode: Literal["human", "ai"] = "human"
+
+
+class GameReplyCreate(BaseModel):
+    attempt_id: str
+
+
+class GameQuestionCreate(BaseModel):
+    question_text: str = Field(min_length=1, max_length=500)
+
+
 class CaseCreate(BaseModel):
     case_code: str = Field(min_length=2, max_length=120)
     source_type: Literal["synthetic", "standardized_patient", "real"] = "standardized_patient"
@@ -339,6 +352,7 @@ class PatientSessionOut(BaseModel):
     chief_complaint: str
     expires_at: datetime
     questions: list[PatientQuestionOut]
+    history: list[dict[str, str]] = Field(default_factory=list)
 
 
 class PatientLinkOut(BaseModel):

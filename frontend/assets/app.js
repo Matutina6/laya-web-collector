@@ -13,6 +13,10 @@ function isAuthPath(path) {
   return path === "/auth/login" || path === "/auth/refresh";
 }
 
+function isPatientSessionPath(path) {
+  return path.startsWith("/patient/session/");
+}
+
 function buildHeaders(options) {
   const headers = {};
   const input = options.headers;
@@ -71,7 +75,7 @@ async function apiRequest(path, options, isRetry) {
     credentials: "same-origin",
   });
   const body = await parseResponseBody(response);
-  if (response.status === 401 && !isAuthPath(path)) {
+  if (response.status === 401 && !isAuthPath(path) && !isPatientSessionPath(path)) {
     if (!isRetry) {
       const refreshed = await tryRefresh();
       if (refreshed) {
@@ -160,7 +164,7 @@ async function requireLogin(allowedRoles) {
     user = await me();
   } catch (err) {
     if (err && err.status === 404) {
-      // Local development (AUTH_MODE != supabase) has no auth endpoints.
+      // Local development (AUTH_MODE=disabled) has no login session.
       return true;
     }
     if (err && err.status === 403) {

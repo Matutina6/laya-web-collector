@@ -29,6 +29,17 @@ from .catalog import load_catalog
 from .config import APP_DIR, cors_origin_list, settings, validate_production_settings
 from .db import SessionLocal, check_database_schema, engine, get_db, init_db
 from .export_training import export_training
+from .game import (
+    ai_doctor_next,
+    ai_patient_reply,
+    ask_game_question,
+    create_game_session,
+    game_state,
+    game_summary,
+    local_game_enabled,
+    patient_brief,
+    process_pending_game_scores,
+)
 from .log_redaction import install_log_redaction
 from .storage import StorageError, get_storage
 from .models import (
@@ -70,6 +81,9 @@ from .schemas import (
     ExportOut,
     FailureCreate,
     FailureOut,
+    GameReplyCreate,
+    GameQuestionCreate,
+    GameSessionCreate,
     GroundTruthUpsert,
     HumanRecordCreate,
     LoginRequest,
@@ -308,6 +322,10 @@ def auth_logout_api(request: Request, response: Response):
 
 @app.get("/api/auth/me")
 def auth_me_api(actor=Depends(actor_id)):
+    if settings.auth_mode == "disabled":
+        # The frontend treats 404 as local development without a login session.
+        # Returning a null role instead makes every page fail its role check.
+        raise HTTPException(status_code=404, detail="authentication disabled")
     return _actor_payload(actor)
 
 
@@ -351,6 +369,96 @@ def catalog(actor=Depends(actor_id)) -> dict[str, Any]:
         "review_status": value.review_status,
         "facts": [fact.to_dict() for fact in value.facts],
     }
+
+
+def _require_local_game() -> None:
+    if not local_game_enabled():
+        raise HTTPException(status_code=404, detail="role-play is available in local development only")
+
+
+@app.post("/api/game/sessions")
+def create_game_session_api(payload: GameSessionCreate, db: Session = Depends(get_db)):
+    _require_local_game()
+    try:
+        return create_game_session(db, patient_mode=payload.patient_mode, doctor_mode=payload.doctor_mode)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/game/encounters/{encounter_id}")
+def game_summary_api(encounter_id: str, db: Session = Depends(get_db)):
+    _require_local_game()
+    try:
+        return game_summary(db, encounter_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.get("/api/game/encounters/{encounter_id}/state")
+def game_state_api(encounter_id: str, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
+    _require_local_game()
+    try:
+        state = game_state(db, encounter_id)
+        if state["scoring_status"] == "scoring":
+            background_tasks.add_task(_background_process_game_scores)
+        return state
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.post("/api/game/encounters/{encounter_id}/ask")
+def game_ask_api(
+    encounter_id: str,
+    payload: GameQuestionCreate,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
+    _require_local_game()
+    try:
+        result = ask_game_question(db, encounter_id, payload.question_text)
+        if game_summary(db, encounter_id)["patient_mode"] == "ai":
+            background_tasks.add_task(_background_ai_patient_reply, encounter_id, result["attempt_id"])
+        return result
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/game/encounters/{encounter_id}/ai-reply")
+def game_ai_reply_api(
+    encounter_id: str,
+    payload: GameReplyCreate,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
+    _require_local_game()
+    try:
+        reply = ai_patient_reply(db, encounter_id, payload.attempt_id)
+        background_tasks.add_task(_background_process_jobs)
+        return reply
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/patient/session/{token}/brief")
+def game_patient_brief_api(token: str, request: Request, db: Session = Depends(get_db)):
+    _require_local_game()
+    if not patient_limiter.allow(client_ip(request)):
+        raise HTTPException(status_code=429, detail="too many requests")
+    try:
+        return patient_brief(db, token)
+    except ValueError as exc:
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
+
+
+@app.post("/api/patient/session/{token}/ai-doctor/next")
+def game_ai_doctor_next_api(token: str, request: Request, db: Session = Depends(get_db)):
+    _require_local_game()
+    if not patient_limiter.allow(client_ip(request)):
+        raise HTTPException(status_code=429, detail="too many requests")
+    try:
+        return ai_doctor_next(db, token)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.post("/api/cases", response_model=CaseOut)
@@ -785,7 +893,7 @@ def patient_session_api(token: str, request: Request, db: Session = Depends(get_
         raise HTTPException(status_code=429, detail="too many requests")
     try:
         return patient_session_view(db, token)
-    except Exception as exc:
+    except ValueError as exc:
         raise HTTPException(status_code=401, detail=str(exc)) from exc
 
 
@@ -796,7 +904,7 @@ def patient_question_view_api(token: str, question_event_id: str, request: Reque
     try:
         question = mark_patient_question_viewed(db, token, question_event_id)
         return {"question_event_id": question.question_event_id, "status": question.status}
-    except Exception as exc:
+    except ValueError as exc:
         raise HTTPException(status_code=401, detail=str(exc)) from exc
 
 
@@ -822,7 +930,7 @@ def patient_question_answer_api(
         # from the durable job row created inside submit_answer.
         background_tasks.add_task(_background_process_jobs)
         return turn
-    except Exception as exc:
+    except ValueError as exc:
         raise HTTPException(status_code=401, detail=str(exc)) from exc
 
 
@@ -878,6 +986,19 @@ def _background_process_question(question_event_id: str) -> None:
 def _background_process_jobs() -> None:
     """Latency accelerator only; the separate worker owns correctness (W6.5)."""
     with SessionLocal() as db:
+        process_pending_game_scores(db, limit=5)
+        process_pending_question_jobs(db, limit=5)
+
+
+def _background_process_game_scores() -> None:
+    with SessionLocal() as db:
+        process_pending_game_scores(db, limit=5)
+
+
+def _background_ai_patient_reply(encounter_id: str, attempt_id: str) -> None:
+    with SessionLocal() as db:
+        ai_patient_reply(db, encounter_id, attempt_id)
+        process_pending_game_scores(db, limit=5)
         process_pending_question_jobs(db, limit=5)
 
 
